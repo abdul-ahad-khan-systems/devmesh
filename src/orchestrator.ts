@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { config } from "./config.js";
 import { route, requiredParameters } from "./router.js";
 import { ModelRegistry } from "./registry.js";
-import { runProvider } from "./providers.js";
+import { checkProviderHealth, runProvider } from "./providers.js";
 import { MeshTrace } from "./trace.js";
 import { captureRepository, repositoryEvidence, type RepositorySnapshot } from "./repository.js";
 
@@ -230,11 +230,26 @@ export async function runMesh(
     registryApiKey
   );
 
-  if (!registryApiKey) {
-    throw new Error("Missing FRELLM_API_KEY");
+  const providers = [
+    ...new Set(
+      Object.values(config.roles)
+    )
+  ];
+
+  for (const provider of providers) {
+    const health = await checkProviderHealth(provider);
+
+    if (!health.available) {
+      throw new Error(
+        `[DevMesh] Provider readiness failed: ${provider}` +
+        `${health.message ? ` — ${health.message}` : ""}`
+      );
+    }
   }
 
-  await registry.refresh();
+  if (providers.includes("freellmapi")) {
+    await registry.refresh();
+  }
 
   const architecture = await runRole(
     trace,

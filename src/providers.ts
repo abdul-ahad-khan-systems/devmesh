@@ -88,7 +88,7 @@ class OpenAICompatibleProvider implements Provider {
     request: ModelRequest,
     selectedModel?: string
   ): Promise<ModelResult> {
-    const gatewayKey = env("FRELLM_API_KEY", true);
+    const gatewayKey = env(this.keyEnv, true);
     const model = selectedModel || env(this.modelEnv, true);
     const started = Date.now();
 
