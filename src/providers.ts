@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { env } from "./config.js";
+import { validateToolCall } from "./tool-gate.js";
 import type { ModelRegistry } from "./registry.js";
 import {
   DEV_MESH_TOOLS,
@@ -235,11 +236,23 @@ class OpenAICompatibleProvider implements Provider {
           args = {};
         }
 
-        const call: ToolCall = {
-          id: rawCall.id,
-          name: rawCall.function.name as ToolCall["name"],
-          arguments: args
-        };
+        const gate = validateToolCall({
+          role: request.role,
+          repository: request.task.repository,
+          call: {
+            id: rawCall.id,
+            name: rawCall.function.name,
+            arguments: args
+          }
+        });
+
+        if (!gate.allowed || !gate.call) {
+          throw new Error(
+            `[${this.name}] Tool call rejected: ${gate.reason}`
+          );
+        }
+
+        const call: ToolCall = gate.call;
 
         console.log(
           `[DevMesh] ${request.role} → tool: ${call.name}`,
