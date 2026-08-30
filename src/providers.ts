@@ -399,8 +399,14 @@ export async function runProvider(
     65536
   );
 
+  const candidateIds = new Set(
+    candidates.map(candidate => candidate.id)
+  );
+
   const ordered = [
-    model,
+    ...(model && candidateIds.has(model)
+      ? [model]
+      : []),
     ...candidates
       .map(candidate => candidate.id)
       .filter(candidate => candidate !== model)
