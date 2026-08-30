@@ -30,21 +30,52 @@ async function git(
 export async function captureRepository(
   repository: string
 ): Promise<RepositorySnapshot> {
-  const [branch, status, diff, names] = await Promise.all([
+  const [
+    branch,
+    status,
+    unstagedDiff,
+    stagedDiff,
+    unstagedNames,
+    stagedNames
+  ] = await Promise.all([
     git(repository, ["branch", "--show-current"]),
     git(repository, ["status", "--short"]),
     git(repository, ["diff", "--no-ext-diff"]),
-    git(repository, ["diff", "--name-only"])
+    git(repository, ["diff", "--cached", "--no-ext-diff"]),
+    git(repository, ["diff", "--name-only"]),
+    git(repository, ["diff", "--cached", "--name-only"])
   ]);
+
+  const untrackedNames = status
+    .split("\n")
+    .filter(line => line.startsWith("?? "))
+    .map(line => line.slice(3).trim())
+    .filter(Boolean);
+
+  const changedFiles = [
+    ...stagedNames.split("\n"),
+    ...unstagedNames.split("\n"),
+    ...untrackedNames
+  ]
+    .map(file => file.trim())
+    .filter(Boolean)
+    .filter(
+      (file, index, files) =>
+        files.indexOf(file) === index
+    );
+
+  const diff = [
+    stagedDiff.trim(),
+    unstagedDiff.trim()
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return {
     repository,
     branch: branch.trim(),
     status,
-    changedFiles: names
-      .split("\n")
-      .map(file => file.trim())
-      .filter(Boolean),
+    changedFiles,
     diff,
     capturedAt: new Date().toISOString()
   };
@@ -54,6 +85,12 @@ export function repositoryEvidence(
   before: RepositorySnapshot,
   after: RepositorySnapshot
 ): string {
+  const untrackedFiles = after.status
+    .split("\n")
+    .filter(line => line.startsWith("?? "))
+    .map(line => line.slice(3).trim())
+    .filter(Boolean);
+
   return [
     "REPOSITORY EVIDENCE",
     "",
@@ -72,6 +109,12 @@ export function repositoryEvidence(
       : "(none detected)",
     "",
     "DIFF AFTER:",
-    after.diff || "(no unstaged diff detected)"
+    after.diff ||
+      "(no staged or unstaged tracked diff detected)",
+    "",
+    "UNTRACKED FILES:",
+    untrackedFiles.length
+      ? untrackedFiles.join("\n")
+      : "(none)"
   ].join("\n");
 }

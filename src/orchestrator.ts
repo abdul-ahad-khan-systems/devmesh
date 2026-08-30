@@ -3,13 +3,13 @@ import { promisify } from "node:util";
 import { config } from "./config.js";
 import { route, requiredParameters } from "./router.js";
 import { ModelRegistry } from "./registry.js";
+import { decideMeshOutcome } from "./decision.js";
 import { checkProviderHealth, runProvider } from "./providers.js";
 import { MeshTrace } from "./trace.js";
 import { captureRepository, repositoryEvidence, type RepositorySnapshot } from "./repository.js";
 
 import type {
   DevTask,
-  MeshDecision,
   MeshReport,
   ModelResult,
   ReviewResult
@@ -534,29 +534,11 @@ export async function runMesh(
       noChangeExpected
     );
 
-  let decision: MeshDecision = "HUMAN_REVIEW";
-
-  if (
-    validation.attempted &&
-    validation.passed &&
-    !conflict &&
-    reviews.every(
-      review => review.verdict === "PASS"
-    ) &&
+  const decision = decideMeshOutcome({
+    validation,
+    reviews,
     evidenceConsistent
-  ) {
-    decision = "PASS";
-  } else if (
-    reviews.some(
-      review => review.verdict === "FAIL"
-    ) ||
-    (
-      validation.attempted &&
-      !validation.passed
-    )
-  ) {
-    decision = "FAIL";
-  }
+  });
 
   trace.emit(
     task.id,

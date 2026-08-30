@@ -8,7 +8,7 @@
     "check": "tsc --noEmit",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "test": "npm run check && npx tsx tests/provider-readiness-gate.test.ts"
+    "test": "npm run check && npx tsx tests/provider-readiness-gate.test.ts && npx tsx tests/model-selection-failover-gate.test.ts && npx tsx tests/model-runtime-failover-gate.test.ts && npx tsx tests/decision-integrity-gate.test.ts && npx tsx tests/repository-evidence-gate.test.ts"
   },
   "engines": {
     "node": ">=20"
