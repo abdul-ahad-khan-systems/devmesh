@@ -12,7 +12,8 @@ import type {
   DevTask,
   MeshReport,
   ModelResult,
-  ReviewResult
+  ReviewResult,
+  ValidationResult
 } from "./types.js";
 
 const execAsync = promisify(exec);
@@ -46,60 +47,119 @@ function hasReviewConflict(reviews: ReviewResult[]): boolean {
 async function validate(
   task: DevTask,
   trace: MeshTrace
-) {
+): Promise<ValidationResult> {
   if (!task.repository) {
+    const output =
+      "Validation not attempted: no repository supplied.";
+
     trace.emit(
       task.id,
       "VALIDATION_COMPLETED",
-      "Validation not attempted: no repository supplied."
+      output,
+      {
+        metadata: {
+          attempted: false,
+          passed: false
+        }
+      }
     );
 
     return {
       attempted: false,
       passed: false,
       command: undefined,
-      output: "Validation not attempted: no repository supplied."
+      output
+    };
+  }
+
+  const command = config.validationCommand?.trim();
+
+  if (!command) {
+    const output =
+      "Validation not attempted: validation command is empty.";
+
+    trace.emit(
+      task.id,
+      "VALIDATION_COMPLETED",
+      output,
+      {
+        metadata: {
+          attempted: false,
+          passed: false
+        }
+      }
+    );
+
+    return {
+      attempted: false,
+      passed: false,
+      command: undefined,
+      output
     };
   }
 
   trace.emit(
     task.id,
     "VALIDATION_STARTED",
-    `Running validation command: ${config.validationCommand}`,
+    `Running validation command: ${command}`,
     {
       metadata: {
-        repository: task.repository
+        repository: task.repository,
+        command
       }
     }
   );
 
   try {
     const result = await execAsync(
-      config.validationCommand,
+      command,
       {
         cwd: task.repository,
-        maxBuffer: 10 * 1024 * 1024
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 180000
       }
     );
 
-    const output = result.stdout + result.stderr;
+    const output =
+      `${result.stdout ?? ""}${result.stderr ?? ""}`;
 
     trace.emit(
       task.id,
       "VALIDATION_COMPLETED",
-      "Validation completed successfully."
+      "Validation completed successfully.",
+      {
+        metadata: {
+          attempted: true,
+          passed: true,
+          command
+        }
+      }
     );
 
     return {
       attempted: true,
       passed: true,
-      command: config.validationCommand,
+      command,
       output
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const candidate = error as {
+      stdout?: unknown;
+      stderr?: unknown;
+      message?: unknown;
+    };
+
     const output =
-      `${error.stdout ?? ""}${error.stderr ?? ""}` ||
-      String(error);
+      `${typeof candidate.stdout === "string"
+        ? candidate.stdout
+        : ""}${typeof candidate.stderr === "string"
+        ? candidate.stderr
+        : ""}` ||
+      (
+        typeof candidate.message === "string"
+          ? candidate.message
+          : String(error)
+      );
 
     trace.emit(
       task.id,
@@ -107,6 +167,9 @@ async function validate(
       "Validation failed.",
       {
         metadata: {
+          attempted: true,
+          passed: false,
+          command,
           error: output
         }
       }
@@ -115,7 +178,7 @@ async function validate(
     return {
       attempted: true,
       passed: false,
-      command: config.validationCommand,
+      command,
       output
     };
   }
@@ -218,9 +281,11 @@ export async function runMesh(
     );
   }
 
+
   const registryBaseUrl =
-    process.env.FREELLM_BASE_URL?.replace(/\/v1\/?$/, "") ??
+    process.env.FRELLM_BASE_URL?.replace(/\/v1\/?$/, "") ??
     "http://127.0.0.1:3001";
+
 
   const registryApiKey =
     process.env.FRELLM_API_KEY ?? "";
@@ -390,7 +455,8 @@ export async function runMesh(
         provider: config.roles.REPAIRER,
         metadata: {
           attempt: repairAttempts,
-          maxAttempts: MAX_REPAIR_ATTEMPTS
+          maxAttempts: MAX_REPAIR_ATTEMPTS,
+          validationBeforeRepair: validation.passed
         }
       }
     );
@@ -446,9 +512,31 @@ export async function runMesh(
       break;
     }
 
-    validation = await validate(
+    const nextValidation = await validate(
       task,
       trace
+    );
+
+    validation = {
+      ...nextValidation,
+      passed:
+        nextValidation.attempted &&
+        nextValidation.passed
+    };
+
+    trace.emit(
+      task.id,
+      "VALIDATION_COMPLETED",
+      validation.passed
+        ? `Repair validation passed after attempt ${repairAttempts}.`
+        : `Repair validation still failing after attempt ${repairAttempts}.`,
+      {
+        metadata: {
+          repairAttempt: repairAttempts,
+          attempted: validation.attempted,
+          passed: validation.passed
+        }
+      }
     );
   }
 

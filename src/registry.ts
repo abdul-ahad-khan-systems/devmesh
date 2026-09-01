@@ -14,6 +14,7 @@ export class ModelRegistry {
   ) {}
 
   async refresh(): Promise<void> {
+
     const response = await fetch(
       `${this.baseUrl.replace(/\/$/, "")}/v1/models`,
       {

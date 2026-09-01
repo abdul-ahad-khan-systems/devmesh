@@ -91,7 +91,12 @@ class OpenAICompatibleProvider implements Provider {
   ): Promise<ModelResult> {
     const gatewayKey = env(this.keyEnv, true);
     const model = selectedModel || env(this.modelEnv, true);
+    const requestBaseUrl =
+      this.name === "freellmapi"
+        ? (env("FRELLM_BASE_URL") || this.baseUrl)
+        : this.baseUrl;
     const started = Date.now();
+
 
     const canUseTools =
       request.role === "IMPLEMENTER" ||
@@ -135,7 +140,7 @@ class OpenAICompatibleProvider implements Provider {
 
       try {
         response = await fetch(
-          `${this.baseUrl.replace(/\/$/, "")}/chat/completions`,
+          `${requestBaseUrl.replace(/\/$/, "")}/v1/chat/completions`,
           {
             method: "POST",
             headers: {
@@ -265,6 +270,12 @@ class OpenAICompatibleProvider implements Provider {
           request.task.repository,
           call
         );
+
+        if (!result.success) {
+          throw new Error(
+            `[${this.name}] Tool execution failed: ${result.output}`
+          );
+        }
 
         console.log(
           `[DevMesh] ${request.role} ← tool: ${call.name} ✓ ` +

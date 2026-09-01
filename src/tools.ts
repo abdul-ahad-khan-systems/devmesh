@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { validateExecution } from "./execution-gate.js";
 import { isAbsolute, relative, resolve } from "node:path";
 import { readFile, writeFile, readdir } from "node:fs/promises";
 
@@ -161,53 +162,10 @@ async function executeTool(
         "command"
       );
 
-      const normalizedCommand =
-        command.trim().toLowerCase();
+      const executionGate = validateExecution(call);
 
-      const blockedPatterns = [
-        "rm -rf",
-        "git reset --hard",
-        "git clean -fd",
-        "sudo ",
-        "which ",
-        "whereis ",
-        "command -v ",
-        "node --version",
-        "npm --version",
-        "npx --version",
-        "tsc --version",
-        "deno --version",
-        "bun --version",
-        "python --version",
-        "python3 --version",
-        "curl --version",
-        "git --version"
-      ];
-
-      const trimmedCommand = normalizedCommand.trim();
-
-      const attemptsRepositoryEscape =
-        trimmedCommand.startsWith("cd /") ||
-        trimmedCommand.startsWith("cd ~") ||
-        trimmedCommand.startsWith("cd ../") ||
-        trimmedCommand.includes("; cd /") ||
-        trimmedCommand.includes("; cd ~") ||
-        trimmedCommand.includes("; cd ../") ||
-        trimmedCommand.includes("&& cd /") ||
-        trimmedCommand.includes("&& cd ~") ||
-        trimmedCommand.includes("&& cd ../");
-
-      if (
-        blockedPatterns.some(pattern =>
-          normalizedCommand.includes(pattern)
-        ) ||
-        trimmedCommand === "pwd" ||
-        attemptsRepositoryEscape
-      ) {
-        throw new Error(
-          "Environment-probing, repository-escape, " +
-          "destructive, or privileged commands are blocked."
-        );
+      if (!executionGate.allowed) {
+        throw new Error(executionGate.reason);
       }
 
       const result = await execFileAsync(
