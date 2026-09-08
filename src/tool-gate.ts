@@ -80,7 +80,8 @@ export function validateToolCall(
   if (!isToolName(candidate.name)) {
     return {
       allowed: false,
-      reason: "Unknown or unsupported tool."
+      reason:
+        `Unknown or unsupported tool: ${String(candidate.name)}.`
     };
   }
 

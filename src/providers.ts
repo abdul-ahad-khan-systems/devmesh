@@ -8,6 +8,7 @@ import {
   executeToolCall,
   type ToolCall
 } from "./tools.js";
+import { StateManager } from "./state.js";
 
 import type {
   ModelRequest,
@@ -34,7 +35,11 @@ export interface ProviderHealth {
 }
 
 interface Provider {
-  complete(request: ModelRequest, selectedModel?: string): Promise<ModelResult>;
+  complete(
+    request: ModelRequest,
+    selectedModel?: string,
+    conversation?: OpenAIMessage[]
+  ): Promise<ModelResult>;
 }
 
 type OpenAIToolCall = {
@@ -50,7 +55,18 @@ type OpenAIMessage = {
   role?: string;
   content?: string | null;
   tool_calls?: OpenAIToolCall[];
+  tool_call_id?: string;
 };
+
+class ProviderFailoverError extends Error {
+  constructor(
+    message: string,
+    public readonly conversation: OpenAIMessage[]
+  ) {
+    super(message);
+    this.name = "ProviderFailoverError";
+  }
+}
 
 function classifyFailure(
   status?: number,
@@ -77,6 +93,29 @@ function classifyFailure(
   return "UNKNOWN";
 }
 
+export function normalizeToolCall(
+  name: string,
+  arguments_: Record<string, unknown>
+): {
+  name: string;
+  arguments: Record<string, unknown>;
+} {
+  if (name === "ls") {
+    return {
+      name: "list_files",
+      arguments:
+        Object.keys(arguments_).length > 0
+          ? arguments_
+          : { path: "." }
+    };
+  }
+
+  return {
+    name,
+    arguments: arguments_
+  };
+}
+
 class OpenAICompatibleProvider implements Provider {
   constructor(
     private readonly name: ProviderName,
@@ -87,7 +126,8 @@ class OpenAICompatibleProvider implements Provider {
 
   async complete(
     request: ModelRequest,
-    selectedModel?: string
+    selectedModel?: string,
+    conversation?: OpenAIMessage[]
   ): Promise<ModelResult> {
     const gatewayKey = env(this.keyEnv, true);
     const model = selectedModel || env(this.modelEnv, true);
@@ -102,38 +142,41 @@ class OpenAICompatibleProvider implements Provider {
       request.role === "IMPLEMENTER" ||
       request.role === "REPAIRER";
 
-    const messages: Array<Record<string, unknown>> = [
-      {
-        role: "system",
-        content:
-          `You are DevMesh role ${request.role}. ` +
-          `Be precise. Never claim tests passed without evidence.`
-      },
-      {
-        role: "user",
-        content: [
-          request.instructions,
-          "",
-          "TASK:",
-          request.task.description,
-          "",
-          "CONSTRAINTS:",
-          ...request.task.constraints,
-          "",
-          "ACCEPTANCE CRITERIA:",
-          ...request.task.acceptanceCriteria,
-          "",
-          "CONTEXT:",
-          request.context || "(none)"
-        ].join("\n")
-      }
-    ];
+    const messages: OpenAIMessage[] =
+      conversation && conversation.length > 0
+        ? conversation.map(message => ({ ...message }))
+        : [
+            {
+              role: "system",
+              content:
+                `You are DevMesh role ${request.role}. ` +
+                `Be precise. Never claim tests passed without evidence.`
+            },
+            {
+              role: "user",
+              content: [
+                request.instructions,
+                "",
+                "TASK:",
+                request.task.description,
+                "",
+                "CONSTRAINTS:",
+                ...request.task.constraints,
+                "",
+                "ACCEPTANCE CRITERIA:",
+                ...request.task.acceptanceCriteria,
+                "",
+                "CONTEXT:",
+                request.context || "(none)"
+              ].join("\n")
+            }
+          ];
 
-    const maxToolRounds = 12;
+    const maxToolRounds = 32;
 
-    for (let round = 0; round <= maxToolRounds; round++) {
+    for (let round = 0; round < maxToolRounds; round++) {
       console.log(
-        `[DevMesh] ${request.role} → model round ${round + 1}/${maxToolRounds + 1}`
+        `[DevMesh] ${request.role} → model round ${round + 1}/${maxToolRounds}`
       );
 
       let response: Response;
@@ -158,16 +201,17 @@ class OpenAICompatibleProvider implements Provider {
                   }
                 : {})
             }),
-            signal: AbortSignal.timeout(180_000)
+            signal: AbortSignal.timeout(600_000)
           }
         );
       } catch (error) {
-        throw new Error(
+        throw new ProviderFailoverError(
           `[${this.name}] ${
             error instanceof Error
               ? error.message
               : String(error)
-          }`
+          }`,
+          messages.map(message => ({ ...message }))
         );
       }
 
@@ -241,13 +285,18 @@ class OpenAICompatibleProvider implements Provider {
           args = {};
         }
 
+        const normalized = normalizeToolCall(
+          rawCall.function.name,
+          args
+        );
+
         const gate = validateToolCall({
           role: request.role,
           repository: request.task.repository,
           call: {
             id: rawCall.id,
-            name: rawCall.function.name,
-            arguments: args
+            name: normalized.name,
+            arguments: normalized.arguments
           }
         });
 
@@ -287,6 +336,26 @@ class OpenAICompatibleProvider implements Provider {
           tool_call_id: result.toolCallId,
           content: result.output
         });
+
+        // Update state after successful tool action
+        const state = StateManager.getCurrentState();
+        if (state) {
+          StateManager.addCompletedAction(state, `Executed tool ${call.name}`);
+          // Note: We don't save here because we want to save after each role completion in orchestrator
+          // But we can save here to persist immediately after each tool action as required
+          // However, saving after every tool action might be heavy, but we'll do it as per requirement.
+          // We'll save the state.
+          // We'll use a fire-and-forget save, but we need to await? We'll await to ensure persistence.
+          // However, we are in a loop, we don't want to wait too long. We'll save asynchronously.
+          // We'll create a promise and not await? But we need to ensure it's saved before continuing.
+          // We'll await the save.
+          // We'll wrap in try/catch to not break the tool execution.
+          try {
+            await StateManager.getInstance().save(state);
+          } catch (saveError) {
+            console.warn(`[DevMesh] Failed to save state after tool action: ${saveError}`);
+          }
+        }
       }
     }
 
@@ -437,6 +506,7 @@ export async function runProvider(
   ];
 
   let lastError: unknown;
+  let conversation: OpenAIMessage[] | undefined;
 
   for (const candidate of ordered) {
     try {
@@ -448,12 +518,17 @@ export async function runProvider(
       const result =
         await providers[provider].complete(
           request,
-          candidate
+          candidate,
+          conversation
         );
 
       return result;
     } catch (error) {
       lastError = error;
+
+      if (error instanceof ProviderFailoverError) {
+        conversation = error.conversation;
+      }
 
       const message =
         error instanceof Error
@@ -464,7 +539,8 @@ export async function runProvider(
         message.includes("RATE_LIMIT") ||
         message.includes("model_not_found") ||
         message.includes("reached its end of life") ||
-        message.includes("UNAVAILABLE");
+        message.includes("UNAVAILABLE") ||
+        message.includes("TIMEOUT");
 
       if (!failover) {
         throw error;

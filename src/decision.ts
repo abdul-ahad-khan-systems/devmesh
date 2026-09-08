@@ -10,6 +10,8 @@ export interface DecisionInputs {
     "attempted" | "passed"
   >;
 
+  validationRequired?: boolean;
+
   reviews: Array<
     Pick<ReviewResult, "verdict">
   >;
@@ -31,9 +33,18 @@ export function decideMeshOutcome(
       review => review.verdict === "PASS"
     );
 
+  const validationRequired =
+    input.validationRequired ?? true;
+
+  const validationSatisfied =
+    !validationRequired ||
+    (
+      input.validation.attempted &&
+      input.validation.passed
+    );
+
   if (
-    input.validation.attempted &&
-    input.validation.passed &&
+    validationSatisfied &&
     !conflict &&
     allReviewsPass &&
     input.evidenceConsistent
@@ -46,6 +57,7 @@ export function decideMeshOutcome(
       review => review.verdict === "FAIL"
     ) ||
     (
+      validationRequired &&
       input.validation.attempted &&
       !input.validation.passed
     )

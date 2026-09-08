@@ -17,10 +17,10 @@ const instructions: Record<Role, string> = {
     "Implement the approved task directly in the supplied repository. Follow this sequence: inspect the relevant files, determine the smallest correct change, make the required repository edits, then validate them. Do not merely describe a solution. Do not repeatedly rediscover the environment. Do not create temporary projects, files, or directories outside the supplied repository. Do not modify files unrelated to the task. After the requested change is implemented and adequately validated, stop and report exactly what changed and what validation was performed.",
 
   REVIEWER:
-    "Independently review the proposed work for correctness, regressions, security, architecture violations, missing tests, and unsupported claims.",
+    "Independently review the proposed work for correctness, regressions, security, architecture violations, missing tests, and unsupported claims. End your review with exactly one verdict: PASS, FAIL, or CONDITIONAL. Use PASS only when the work satisfies the task and acceptance criteria; use FAIL when a substantive defect prevents acceptance; use CONDITIONAL when unresolved conditions or human review remain.",
 
   ALTERNATIVE_REVIEWER:
-    "Provide an independent second review. Challenge assumptions and identify issues the primary reviewer may have missed.",
+    "Provide an independent second review. Challenge assumptions and identify issues the primary reviewer may have missed. End your review with exactly one verdict: PASS, FAIL, or CONDITIONAL. Use PASS only when the work satisfies the task and acceptance criteria; use FAIL when a substantive defect prevents acceptance; use CONDITIONAL when unresolved conditions or human review remain.",
 
   VALIDATOR:
     "Evaluate executable validation evidence. Do not treat an AI assertion as proof that the implementation works.",
@@ -51,6 +51,18 @@ function selectModel(
   // Other providers retain their own configured model.
   if (provider !== "freellmapi" || !registry) {
     return undefined;
+  }
+
+  const override = process.env.FRELLM_MODEL?.trim();
+
+  if (override) {
+    if (!registry.has(override)) {
+      throw new Error(
+        `FRELLM_MODEL "${override}" is not available in the FreeLLMAPI registry`
+      );
+    }
+
+    return override;
   }
 
   return registry.best(requirements[role], 65536)?.id;

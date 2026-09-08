@@ -22,18 +22,26 @@ assert.equal(
   true
 );
 
+const unknownToolResult = validateToolCall({
+  role: "IMPLEMENTER",
+  repository,
+  call: {
+    id: "call-2",
+    name: "delete_everything",
+    arguments: {}
+  }
+});
+
 assert.equal(
-  validateToolCall({
-    role: "IMPLEMENTER",
-    repository,
-    call: {
-      id: "call-2",
-      name: "delete_everything",
-      arguments: {}
-    }
-  }).allowed,
+  unknownToolResult.allowed,
   false,
   "Unknown tools must be rejected."
+);
+
+assert.match(
+  unknownToolResult.reason,
+  /delete_everything/,
+  "Unknown-tool rejection must identify the rejected tool."
 );
 
 assert.equal(

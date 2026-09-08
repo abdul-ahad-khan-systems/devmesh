@@ -36,6 +36,7 @@ export interface DevTask {
   repository?: string;
   constraints: string[];
   acceptanceCriteria: string[];
+  validationMode?: "required" | "deferred";
 }
 
 export interface ModelRequest {

@@ -6,9 +6,9 @@
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit",
-    "dev": "tsx src/cli.ts",
+    "dev": "tsx src/dev-bootstrap.ts",
     "start": "node dist/cli.js",
-    "test": "npm run check && npx tsx tests/provider-readiness-gate.test.ts && npx tsx tests/model-selection-failover-gate.test.ts && npx tsx tests/model-runtime-failover-gate.test.ts && npx tsx tests/decision-integrity-gate.test.ts && npx tsx tests/repository-evidence-gate.test.ts"
+    "test": "npm run check && npx tsx tests/provider-readiness-gate.test.ts && npx tsx tests/model-selection-failover-gate.test.ts && npx tsx tests/model-runtime-failover-gate.test.ts && npx tsx tests/tool-round-limit-integrity-gate.test.ts && npx tsx tests/decision-integrity-gate.test.ts && npx tsx tests/repository-evidence-gate.test.ts && npx tsx tests/cli-command-integrity-gate.test.ts && npx tsx tests/mission-lock-integrity-gate.test.ts && npx tsx tests/dev-bootstrap-integrity-gate.test.ts"
   },
   "engines": {
     "node": ">=20"

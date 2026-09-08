@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { validateExecution } from "./execution-gate.js";
 import { isAbsolute, relative, resolve } from "node:path";
-import { readFile, writeFile, readdir } from "node:fs/promises";
+import { readFile, writeFile, readdir, stat } from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,6 +68,12 @@ async function executeTool(
         stringArg(call.arguments, "path")
       );
 
+      const info = await stat(path);
+
+      if (!info.isFile()) {
+        throw new Error("read_file requires a regular file path.");
+      }
+
       return await readFile(path, "utf8");
     }
 
@@ -111,23 +117,36 @@ async function executeTool(
         "query"
       );
 
-      const result = await execFileAsync(
-        "grep",
-        [
-          "-R",
-          "-n",
-          "--exclude-dir=.git",
-          "--exclude-dir=node_modules",
-          query,
-          "."
-        ],
-        {
-          cwd: repository,
-          maxBuffer: 10 * 1024 * 1024
-        }
-      );
+      try {
+        const result = await execFileAsync(
+          "grep",
+          [
+            "-R",
+            "-n",
+            "--exclude-dir=.git",
+            "--exclude-dir=node_modules",
+            query,
+            "."
+          ],
+          {
+            cwd: repository,
+            maxBuffer: 10 * 1024 * 1024
+          }
+        );
 
-      return result.stdout || "(no matches)";
+        return result.stdout || "(no matches)";
+      } catch (error) {
+        if (
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === 1
+        ) {
+          return "(no matches)";
+        }
+
+        throw error;
+      }
     }
 
     case "git_diff": {

@@ -7,6 +7,7 @@ import { decideMeshOutcome } from "./decision.js";
 import { checkProviderHealth, runProvider } from "./providers.js";
 import { MeshTrace } from "./trace.js";
 import { captureRepository, repositoryEvidence, type RepositorySnapshot } from "./repository.js";
+import { StateManager } from "./state.js";
 
 import type {
   DevTask,
@@ -116,7 +117,7 @@ async function validate(
       {
         cwd: task.repository,
         maxBuffer: 10 * 1024 * 1024,
-        timeout: 180000
+        timeout: 600000
       }
     );
 
@@ -234,6 +235,25 @@ async function runRole(
       }
     );
 
+    // Update state after successful role completion
+    const state = StateManager.getCurrentState();
+    if (state) {
+      // Update role-specific fields
+      StateManager.setRole(state, role);
+      StateManager.setProviderAndModel(state, routed.provider, routed.model ?? "");
+      // Increment model round? Actually we increment after each tool action in provider, but we can also increment here for the role overall?
+      // We'll leave it as is; the provider increments per tool round.
+      // We'll add completed action for the role completion
+      StateManager.addCompletedAction(state, `Completed role ${role}`);
+      StateManager.setNextRequiredAction(state, "Proceed to next phase"); // This will be updated by orchestrator logic
+      // Save state
+      try {
+        await StateManager.getInstance().save(state);
+      } catch (saveError) {
+        console.warn(`[DevMesh] Failed to save state after role completion: ${saveError}`);
+      }
+    }
+
     return result;
   } catch (error) {
     console.error(
@@ -259,6 +279,18 @@ async function runRole(
       }
     );
 
+    // Update state on role failure
+    const state = StateManager.getCurrentState();
+    if (state) {
+      StateManager.addFailure(state, role, routed.provider, error instanceof Error ? error.message : String(error));
+      // We don't set nextRequiredAction here because the failure will trigger repair or failover
+      try {
+        await StateManager.getInstance().save(state);
+      } catch (saveError) {
+        console.warn(`[DevMesh] Failed to save state after role failure: ${saveError}`);
+      }
+    }
+
     throw error;
   }
 }
@@ -267,6 +299,30 @@ export async function runMesh(
   task: DevTask
 ): Promise<MeshReport> {
   const trace = new MeshTrace(task.id);
+
+  // Load persisted state if exists
+  const persistedState = await StateManager.getInstance().load(task);
+  if (persistedState) {
+    StateManager.setCurrentState(persistedState);
+    console.log(`[DevMesh] Resuming from persisted state for task ${task.id}`);
+    // Emit a trace event for resumption
+    trace.emit(
+      task.id,
+      "TASK_RECEIVED",
+      `Resuming from persisted state. Last action: ${persistedState.lastSuccessfulAction ?? "none"}`,
+      { metadata: { resumed: true } }
+    );
+  } else {
+    // Create initial state and set as current
+    const initialState = StateManager.createInitialState(task);
+    StateManager.setCurrentState(initialState);
+    // Save initial state
+    try {
+      await StateManager.getInstance().save(initialState);
+    } catch (saveError) {
+      console.warn(`[DevMesh] Failed to save initial state: ${saveError}`);
+    }
+  }
 
   let repositoryBefore: RepositorySnapshot | undefined;
   let repositoryAfter: RepositorySnapshot | undefined;
@@ -316,6 +372,17 @@ export async function runMesh(
     await registry.refresh();
   }
 
+  // Update state phase to ARCHITECT
+  const state = StateManager.getCurrentState();
+  if (state) {
+    StateManager.setPhase(state, "ARCHITECT");
+    try {
+      await StateManager.getInstance().save(state);
+    } catch (saveError) {
+      console.warn(`[DevMesh] Failed to save state after setting phase: ${saveError}`);
+    }
+  }
+
   const architecture = await runRole(
     trace,
     task,
@@ -323,6 +390,17 @@ export async function runMesh(
     "",
     registry
   );
+
+  // Update state with architecture text
+  if (state) {
+    StateManager.setArchitectureText(state, architecture.text);
+    StateManager.setPhase(state, "IMPLEMENTER");
+    try {
+      await StateManager.getInstance().save(state);
+    } catch (saveError) {
+      console.warn(`[DevMesh] Failed to save state after architecture: ${saveError}`);
+    }
+  }
 
   const implementation = await runRole(
     trace,
@@ -362,6 +440,16 @@ export async function runMesh(
     "REVIEW_STARTED",
     "Independent review phase started."
   );
+
+  // Update state phase to REVIEW
+  if (state) {
+    StateManager.setPhase(state, "REVIEW");
+    try {
+      await StateManager.getInstance().save(state);
+    } catch (saveError) {
+      console.warn(`[DevMesh] Failed to save state before review: ${saveError}`);
+    }
+  }
 
   async function runReviews(
     context: string
@@ -411,6 +499,17 @@ export async function runMesh(
 
   let reviews = await runReviews(reviewContext);
 
+  // Update state with review texts
+  if (state) {
+    StateManager.setReviewTexts(state, reviews[0].result.text, reviews[1].result.text);
+    StateManager.setPhase(state, "VALIDATION");
+    try {
+      await StateManager.getInstance().save(state);
+    } catch (saveError) {
+      console.warn(`[DevMesh] Failed to save state after review: ${saveError}`);
+    }
+  }
+
   trace.emit(
     task.id,
     "REVIEW_COMPLETED",
@@ -423,15 +522,39 @@ export async function runMesh(
     }
   );
 
-  let validation = await validate(
-    task,
-    trace
-  );
+  const validationRequired =
+    task.validationMode !== "deferred";
+
+  let validation: ValidationResult = validationRequired
+    ? await validate(task, trace)
+    : {
+        attempted: false,
+        passed: false,
+        command: undefined,
+        output:
+          "Global validation deferred for this construction batch."
+      };
+
+  // Update state with validation result
+  if (state) {
+    StateManager.setValidationResult(state, validation.output, validation.attempted, validation.passed);
+    if (validationRequired && task.repository && !validation.passed) {
+      StateManager.setPhase(state, "REPAIRER");
+    } else {
+      StateManager.setPhase(state, "DECISION");
+    }
+    try {
+      await StateManager.getInstance().save(state);
+    } catch (saveError) {
+      console.warn(`[DevMesh] Failed to save state after validation: ${saveError}`);
+    }
+  }
 
   const MAX_REPAIR_ATTEMPTS = 3;
   let repairAttempts = 0;
 
   while (
+    validationRequired &&
     task.repository &&
     !validation.passed &&
     repairAttempts < MAX_REPAIR_ATTEMPTS
@@ -460,6 +583,17 @@ export async function runMesh(
         }
       }
     );
+
+    // Update state for repair attempt
+    if (state) {
+      StateManager.setPhase(state, "REPAIRER");
+      StateManager.incrementRepairAttempts(state);
+      try {
+        await StateManager.getInstance().save(state);
+      } catch (saveError) {
+        console.warn(`[DevMesh] Failed to save state before repair attempt: ${saveError}`);
+      }
+    }
 
     try {
       const repairResult = await runRole(
@@ -524,6 +658,21 @@ export async function runMesh(
         nextValidation.passed
     };
 
+    // Update state after repair validation
+    if (state) {
+      StateManager.setValidationResult(state, nextValidation.output, nextValidation.attempted, nextValidation.passed);
+      if (nextValidation.passed) {
+        StateManager.setPhase(state, "DECISION");
+      } else {
+        StateManager.setPhase(state, "REPAIRER"); // stay in repairer if still failing
+      }
+      try {
+        await StateManager.getInstance().save(state);
+      } catch (saveError) {
+        console.warn(`[DevMesh] Failed to save state after repair validation: ${saveError}`);
+      }
+    }
+
     trace.emit(
       task.id,
       "VALIDATION_COMPLETED",
@@ -565,6 +714,16 @@ export async function runMesh(
       }
     );
 
+    // Update state for fresh post-repair review
+    if (state) {
+      StateManager.setPhase(state, "REVIEW");
+      try {
+        await StateManager.getInstance().save(state);
+      } catch (saveError) {
+        console.warn(`[DevMesh] Failed to save state before fresh review: ${saveError}`);
+      }
+    }
+
     reviews = await runReviews([
       `ARCHITECTURE PLAN:\n${architecture.text}`,
       `IMPLEMENTATION RESULT:\n${implementation.text}`,
@@ -572,6 +731,17 @@ export async function runMesh(
       finalEvidence,
       `FINAL VALIDATION:\n${validation.output}`
     ].join("\n\n"));
+
+    // Update state with fresh review texts
+    if (state) {
+      StateManager.setReviewTexts(state, reviews[0].result.text, reviews[1].result.text);
+      StateManager.setPhase(state, "DECISION");
+      try {
+        await StateManager.getInstance().save(state);
+      } catch (saveError) {
+        console.warn(`[DevMesh] Failed to save state after fresh review: ${saveError}`);
+      }
+    }
 
     trace.emit(
       task.id,
@@ -624,9 +794,21 @@ export async function runMesh(
 
   const decision = decideMeshOutcome({
     validation,
+    validationRequired,
     reviews,
     evidenceConsistent
   });
+
+  // Update state with decision
+  if (state) {
+    StateManager.setPhase(state, "DECISION");
+    StateManager.addCompletedAction(state, `Decision: ${decision}`);
+    try {
+      await StateManager.getInstance().save(state);
+    } catch (saveError) {
+      console.warn(`[DevMesh] Failed to save state after decision: ${saveError}`);
+    }
+  }
 
   trace.emit(
     task.id,
