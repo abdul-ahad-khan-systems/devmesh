@@ -26,6 +26,10 @@ describe("State Persistence Gate", () => {
     await writeFile(testFile, "hello world", "utf8");
     // Reset environment
     process.env = { ...originalEnv };
+    // Provider readiness requires a key before runMesh() will proceed;
+    // fetch itself is mocked per-test below, so the actual value is
+    // never used to contact a real service.
+    process.env.FRELLM_API_KEY = "test-key";
     // Clear any existing state manager instance
     // @ts-ignore
     StateManager.instance = undefined;

@@ -8,7 +8,9 @@
     "check": "tsc --noEmit",
     "dev": "tsx src/dev-bootstrap.ts",
     "start": "node dist/cli.js",
-    "test": "npm run check && npx tsx tests/provider-readiness-gate.test.ts && npx tsx tests/model-selection-failover-gate.test.ts && npx tsx tests/model-runtime-failover-gate.test.ts && npx tsx tests/tool-round-limit-integrity-gate.test.ts && npx tsx tests/decision-integrity-gate.test.ts && npx tsx tests/repository-evidence-gate.test.ts && npx tsx tests/cli-command-integrity-gate.test.ts && npx tsx tests/mission-lock-integrity-gate.test.ts && npx tsx tests/dev-bootstrap-integrity-gate.test.ts"
+    "test": "npm run check && npx tsx --test tests/execution-policy-gate.test.ts tests/tool-execution-policy-gate.test.ts tests/tool-call-provider-path-gate.test.ts tests/tool-call-integrity-gate.test.ts tests/mission-lock-integrity-gate.test.ts tests/cli-command-integrity-gate.test.ts tests/decision-integrity-gate.test.ts tests/repair-loop-integrity-gate.test.ts tests/repository-mutation-integrity-gate.test.ts tests/provider-readiness-gate.test.ts tests/model-selection-failover-gate.test.ts tests/model-runtime-failover-gate.test.ts tests/tool-round-limit-integrity-gate.test.ts tests/dev-bootstrap-integrity-gate.test.ts",
+    "test:integration": "npx tsx --test tests/end-to-end-mesh-gate.test.ts tests/repository-evidence-gate.test.ts tests/repository-mutation-evidence-gate.test.ts tests/state-persistence-gate.test.ts tests/validation-integrity-gate.test.ts",
+    "test:all": "npm run check && npx tsx --test tests/*.test.ts"
   },
   "engines": {
     "node": ">=20"
