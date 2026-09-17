@@ -26,16 +26,15 @@ const BLOCKED_COMMANDS = [
 ] as const;
 
 function isRepositoryEscape(command: string): boolean {
+  // Unanchored: a repository-escaping "cd" can appear inside a subshell
+  // ($(cd / && ...)), a pipeline, or after a newline, not only at the
+  // start of the command or immediately after ";" / "&&". Matching the
+  // substring anywhere accepts some false positives as the cost of
+  // closing that hole.
   return (
-    command.startsWith("cd /") ||
-    command.startsWith("cd ~") ||
-    command.startsWith("cd ../") ||
-    command.includes("; cd /") ||
-    command.includes("; cd ~") ||
-    command.includes("; cd ../") ||
-    command.includes("&& cd /") ||
-    command.includes("&& cd ~") ||
-    command.includes("&& cd ../")
+    command.includes("cd /") ||
+    command.includes("cd ~") ||
+    command.includes("cd ../")
   );
 }
 
@@ -61,7 +60,9 @@ export function validateExecution(
     };
   }
 
-  const normalized = command.trim().toLowerCase();
+  // Collapse all whitespace runs to a single space so patterns like
+  // "rm -rf" cannot be bypassed with "rm  -rf" (double space, tabs, etc.)
+  const normalized = command.trim().toLowerCase().replace(/\s+/g, " ");
 
   if (normalized === "pwd") {
     return {

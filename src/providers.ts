@@ -205,12 +205,24 @@ class OpenAICompatibleProvider implements Provider {
           }
         );
       } catch (error) {
+        // Node's fetch() throws a generic "fetch failed" TypeError for
+        // every transport-level failure (timeout, DNS, connection
+        // refused) -- the real cause lives on error.cause, not
+        // error.message. Any transport-level failure here is always
+        // failover-eligible, and must always carry the accumulated
+        // conversation, regardless of what the raw message string says.
+        const causeMessage =
+          error instanceof Error &&
+          error.cause instanceof Error
+            ? error.cause.message
+            : undefined;
+
         throw new ProviderFailoverError(
-          `[${this.name}] ${
+          `[${this.name}] TRANSPORT_FAILURE: ${
             error instanceof Error
               ? error.message
               : String(error)
-          }`,
+          }${causeMessage ? ` (cause: ${causeMessage})` : ""}`,
           messages.map(message => ({ ...message }))
         );
       }
@@ -228,9 +240,10 @@ class OpenAICompatibleProvider implements Provider {
           JSON.stringify(data.error ?? data)
         );
 
-        throw new Error(
+        throw new ProviderFailoverError(
           `[${this.name}] ${failure}: HTTP ${response.status}: ` +
-          JSON.stringify(data.error ?? data)
+          JSON.stringify(data.error ?? data),
+          messages.map(message => ({ ...message }))
         );
       }
 
@@ -536,6 +549,7 @@ export async function runProvider(
           : String(error);
 
       const failover =
+        error instanceof ProviderFailoverError ||
         message.includes("RATE_LIMIT") ||
         message.includes("model_not_found") ||
         message.includes("reached its end of life") ||
