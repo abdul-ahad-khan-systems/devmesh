@@ -491,14 +491,23 @@ export async function runProvider(
 ): Promise<ModelResult> {
   if (
     provider !== "freellmapi" ||
-    !registry ||
-    !model
+    !registry
   ) {
     return providers[provider].complete(
       request,
       model
     );
   }
+
+  // NOTE: !model is intentionally NOT part of the bypass condition above.
+  // model being undefined can mean "no capable candidate existed at
+  // routing time" (see router.ts selectModel), not "no registry is
+  // available." The failover loop below already handles an undefined/
+  // absent model correctly (falls through to ordered = all ranked
+  // candidates, or throws "All capable models failed." if there are
+  // none) -- routing model===undefined into the unfiltered static
+  // env-var fallback in complete() would silently ignore role
+  // capability requirements.
 
   const candidates = registry.ranked(
     requiredParameters,

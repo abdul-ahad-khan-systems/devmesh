@@ -56,9 +56,17 @@ function selectModel(
   const override = process.env.FRELLM_MODEL?.trim();
 
   if (override) {
-    if (!registry.has(override)) {
+    // has() only checks existence/availability, not capability -- an
+    // override must satisfy the same requirements/context-window
+    // threshold as normal selection, or it can silently be asked to
+    // do something (e.g. tool calls) it cannot support.
+    const eligible = registry.ranked(requirements[role], 65536);
+
+    if (!eligible.some(candidate => candidate.id === override)) {
       throw new Error(
-        `FRELLM_MODEL "${override}" is not available in the FreeLLMAPI registry`
+        `FRELLM_MODEL "${override}" is not available, or does not satisfy ` +
+        `the required capabilities/context window for role "${role}" ` +
+        `(requires: ${requirements[role].join(", ") || "none"})`
       );
     }
 

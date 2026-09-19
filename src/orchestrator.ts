@@ -443,6 +443,7 @@ export async function runMesh(
 
   // Update state phase to REVIEW
   if (state) {
+    StateManager.setRepositoryEvidence(state, evidence);
     StateManager.setPhase(state, "REVIEW");
     try {
       await StateManager.getInstance().save(state);
@@ -716,6 +717,7 @@ export async function runMesh(
 
     // Update state for fresh post-repair review
     if (state) {
+      StateManager.setRepositoryEvidence(state, finalEvidence);
       StateManager.setPhase(state, "REVIEW");
       try {
         await StateManager.getInstance().save(state);
